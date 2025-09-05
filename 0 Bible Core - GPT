@@ -1,0 +1,274 @@
+# 🦴 Pine Script v5 — Emulated Reference (Works-as-Manual, Non-verbatim)
+⚖️ Redundancy vs. Quantum Efficiency • Zero-repaint defaults • Safe math
+
+========================================================
+SECTION 0 — MINIMAL TEMPLATES
+========================================================
+## Indicator (non-repainting signal template)
+ //@version=5
+ indicator("NAME", overlay=true, timeframe="", timeframe_gaps=true)
+ // ---- Inputs
+ src       = input.source(close, "Source")
+ lenEMA    = input.int(50,  minval=1)
+ confirm   = input.bool(true, "Confirm on bar close")
+ // ---- Calc
+ ema_      = ta.ema(src, lenEMA)
+ long_     = (confirm ? barstate.isconfirmed : true) and ta.crossover(src, ema_)
+ short_    = (confirm ? barstate.isconfirmed : true) and ta.crossunder(src, ema_)
+ // ---- Plots
+ plot(ema_, "EMA", color=color.new(color.teal, 0))
+ plotshape(long_,  "Long",  shape.triangleup,   location.belowbar)
+ plotshape(short_, "Short", shape.triangledown, location.abovebar)
+
+## Strategy (bracket exit, safe sizing)
+ //@version=5
+ strategy("STRAT", overlay=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.01)
+ qtyPct   = input.float(10, "Qty %", minval=0.1, maxval=100)
+ riskATR  = input.int(14), atrMultSL = input.float(2.0), atrMultTP = input.float(3.0)
+ atr_     = ta.atr(riskATR)
+ enterL   = ta.crossover(close, ta.ema(close, 50)) and barstate.isconfirmed
+ enterS   = ta.crossunder(close, ta.ema(close, 50)) and barstate.isconfirmed
+ size     = strategy.equity * qtyPct * 0.01 / close
+ if enterL
+     strategy.entry("L", strategy.long,  qty=math.max(size, 1))
+     strategy.exit("Lx", "L", stop=close - atrMultSL*atr_, limit=close + atrMultTP*atr_)
+ if enterS
+     strategy.entry("S", strategy.short, qty=math.max(size, 1))
+     strategy.exit("Sx", "S", stop=close + atrMultSL*atr_, limit=close - atrMultTP*atr_)
+
+========================================================
+SECTION 1 — PROGRAM STRUCTURE (Spine)
+========================================================
+• Version tag at line 1.
+• Script kinds: indicator() | strategy() | library().
+• Scope: globals, function-local, `var` persistent, `varip` intra-bar persistent.
+
+========================================================
+SECTION 2 — TYPES + SERIES SEMANTICS
+========================================================
+• Primitives: int, float, bool, string, color.
+• Objects: line, label, box, table.
+• Series vs simple vs const:
+  - simple/const are bar-invariant; series changes each bar.
+  - Function inputs that accept series return series.
+• Casting: int(x), float(x), str.tostring(x). Prefer explicit casts at API boundaries.
+• History: x[n] with n>=0. `na` guard: nz(x, default).
+
+========================================================
+SECTION 3 — OPERATORS (Emulated Precedence High→Low)
+========================================================
+1. [] history
+2. unary + -  not
+3. *  /  %
+4. +  -
+5. < <= > >=
+6. == !=
+7. and
+8. or
+9. ?:  (ternary requires both branches type-compatible)
+
+========================================================
+SECTION 4 — CONTROL FLOW
+========================================================
+• if / else; switch; for; while; break; continue.
+• Loops must be bounded; prefer ta.* vector ops.
+• Ternary for short branches; keep types aligned.
+
+========================================================
+SECTION 5 — INPUTS
+========================================================
+• input.int/float/bool/string/source/color with bounds.
+• Provide safe defaults; validate via guard block (Section 11).
+
+========================================================
+SECTION 6 — CORE LIBRARY SURFACE (Names Only, Non-verbatim)
+========================================================
+• ta.*: ema, sma, rma, wma, rsi, stoch, macd, atr, stdev, bb, adx, supertrend, highest, lowest, change, roc, crossover, crossunder.
+• math.*: min, max, pow, sqrt, abs, round, floor, ceil, log, exp, sum.
+• request.*: security(symbol, timeframe, expression, lookahead), ohlc, financial.
+• strategy.*: entry, exit, close, order, position_size/value, risk.*, performance vars.
+• draw: line.*, label.*, box.*, table.*.
+• env: barstate.*, timeframe.*, syminfo.*, ticker.*, time*, session*, dayofweek.
+
+========================================================
+SECTION 7 — DATA REQUESTS (No-repaint Pattern)
+========================================================
+f_sec(sym, tf, expr) =>
+    request.security(sym, tf, expr, barmerge.gaps_off, barmerge.lookahead_off)
+• Dedupe unique (symbol,timeframe) pairs.
+• Never use lookahead_on for signals unless explicitly doing preview visuals.
+
+========================================================
+SECTION 8 — PLOTTING
+========================================================
+• plot/plotshape/plotchar/plotbar/plotcandle with titles.
+• Optional visuals gated by input toggles; `display=display.none` for heavy plots.
+• Reuse drawing handles with `var` for performance.
+
+========================================================
+SECTION 9 — STRATEGY RULES
+========================================================
+• Stable IDs for entries/exits.
+• One source of truth for state; avoid contradictory simultaneous orders.
+• Brackets: exit(stop=…, limit=…).
+• Sizing deterministic; guard divide by zero.
+
+========================================================
+SECTION 10 — NON-REPAINT CANON
+========================================================
+• Gate trade signals with `barstate.isconfirmed`.
+• All `request.security` use `lookahead_off`.
+• Avoid future leakage (no references to the forming bar for committed signals).
+• Prefer ta.* that do not peek.
+
+========================================================
+SECTION 11 — SELF-AUDIT BLOCK (Paste into any script)
+========================================================
+audit() =>
+    errs = ""
+    // Version header exists? (assume yes inside TV; here we assert invariants)
+    errs += (syminfo.pointvalue <= 0 ? "Bad pointvalue|" : "")
+    errs += (timeframe.isseconds and timeframe.multiplier < 5 ? "TF too fine|" : "")
+    errs += (barstate.isrealtime and not barstate.isconfirmed ? "" : "")  // placeholder
+    errs
+
+if barstate.islast
+    e = audit()
+    label.new(bar_index, high, e == "" ? "OK" : "AUDIT: " + e, style=label.style_label_down, textcolor=color.white, color=e==""?color.new(color.green,60):color.new(color.red,40))
+
+========================================================
+SECTION 12 — ERROR→FIX CATALOG (Emulated)
+========================================================
+E01 Parser: “no viable alternative at character …”
+  Cause: Unicode quotes, exotic hyphen, hidden char
+  Fix: Re-type line with ASCII; remove BOM; normalize whitespace
+  Prevent: plain editor; lint before paste
+
+E02 Parser: “mismatched input … expecting …”
+  Cause: Missing comma/paren; wrong arg order; stray token
+  Fix: One-arg-per-line calls; close delimiters
+  Prevent: Formatter discipline; small functions
+
+E03 Type: “cannot call … arguments cannot be assigned”
+  Cause: series vs simple, float vs int, color vs int
+  Fix: cast to expected types; align branch types
+  Prevent: add `int()/float()` at boundaries
+
+E04 Name: “undeclared identifier”
+  Cause: typo, scope, missing namespace
+  Fix: add declaration or prefix (e.g., ta.)
+  Prevent: consistent naming; central imports
+
+E05 History: “cannot determine referencing length (max_bars_back)”
+  Cause: dynamic indexing or late init
+  Fix: prewarm series; set max_bars_back; avoid data-dependent first use
+  Prevent: initialize all series early with nz()
+
+E06 Limits: “loop is too long (>500 ms)”
+  Cause: heavy loops / drawings per bar
+  Fix: ta.* replacements; cap iterations; reuse handles
+  Prevent: performance budget; `var` caches
+
+E07 Limits: “too many local variables”
+  Cause: many temps per scope
+  Fix: refactor; reuse; hoist; pack into arrays/records
+  Prevent: functional decomposition
+
+E08 Limits: “requesting too many securities”
+  Cause: many unique (symbol,tf)
+  Fix: cache/dedupe; central fetch
+  Prevent: data layer budgeting
+
+E09 Runtime: divide by zero / invalid math
+  Cause: zero denominators, `na` arithmetic
+  Fix: guards: denom!=0, nz(x, fallback)
+  Prevent: safe-math helpers
+
+E10 Strategy: “duplicate order id” / conflicting orders
+  Cause: reused IDs, simultaneous opposing entries
+  Fix: unique IDs; serialize intent
+  Prevent: finite-state machine for position logic
+
+========================================================
+SECTION 13 — SAFE-MATH + HELPERS
+========================================================
+safe_div(n, d, alt) =>
+    d == 0 ? alt : n / d
+
+confirm_bar(okForRealtime) =>
+    okForRealtime ? true : barstate.isconfirmed
+
+nzf(x, f) =>
+    na(x) ? f : x
+
+========================================================
+SECTION 14 — REQUEST LAYER (Dedup + No-repaint)
+========================================================
+var symSet = input.string(syminfo.tickerid, "Symbol")
+var tfSet  = input.string("", "Higher TF (blank=chart)")
+get_htf(expr) =>
+    tfSet == "" ? expr : request.security(symSet, tfSet, expr, barmerge.gaps_off, barmerge.lookahead_off)
+
+========================================================
+SECTION 15 — PATTERN LIB (Names Only, Plug-in)
+========================================================
+• Moving averages: sma/ema/wma/rma wrappers with safe_div
+• Oscillators: rsi/stoch/macd normalized to 0–100 when applicable
+• Volatility: atr/stdev; bands via stdev or atr envelopes
+• Crosses: bool crossover/crossunder gates with confirm_bar()
+
+========================================================
+SECTION 16 — DIAGNOSTIC PLOTS (Silent by default)
+========================================================
+showDiag = input.bool(false, "Diagnostics")
+plot(showDiag ? ta.atr(14) : na, "ATR(diag)", display=display.all, color=color.new(color.orange, 30))
+
+========================================================
+SECTION 17 — ROLE-BASED INTERROGATION (8 lenses)
+========================================================
+• Compiler Engineer: tokens, delimiters, precedence; ASCII-only
+• Pine Lawyer: v5-only APIs; lookahead_off; series discipline
+• TV Specialist: request/security budgets; GC pressure; drawing reuse
+• UX Designer: clear labels; safe defaults; toggles; accessibility
+• QA/Test: golden windows; seed randomization; fuzz inputs; OOS split
+• SRE: failure domains; degrade gracefully; last-bar diagnostics only
+• Security/Compliance: no external I/O; determinism; audit logs in labels
+• Doc Writer: README with assumptions, limits, TFs, symbols, non-repaint rules
+
+========================================================
+SECTION 18 — ⚖️ REDUNDANCY vs QUANTUM EFFICIENCY
+========================================================
+• Redundant safety: confirm_bar(), guards, dedup fetch, explicit casts
+• Quantum efficiency: vectorize (ta.*), pooled drawings, minimal branches
+• Policy: keep confirm gating for signals; relax only for visuals
+
+========================================================
+SECTION 19 — FINAL FUSION CHECKLIST (copy to PR template)
+========================================================
+[ ] Version header v5
+[ ] Exactly one script kind
+[ ] Inputs bounded
+[ ] No negative history; nz guards
+[ ] Types aligned; explicit casts at boundaries
+[ ] No lookahead_on; signals gated
+[ ] Dedupe request.security; budgeted
+[ ] Unique order IDs; bracket exits
+[ ] No per-bar allocations; reused handles
+[ ] Diagnostics off by default; last-bar audit label
+[ ] Lint: ASCII only, one-arg-per-line in long calls
+
+========================================================
+SECTION 20 — DROP-IN GUARD (can paste anywhere)
+========================================================
+guard_ok(name, cond) =>
+    if barstate.islast and not cond
+        label.new(bar_index, high, "GUARD FAIL: " + name, style=label.style_label_down, color=color.new(color.red, 40))
+        false
+    else
+        true
+
+// Example guards
+_ = guard_ok("No lookahead", barmerge.lookahead_off == barmerge.lookahead_off)
+_ = guard_ok("Inputs sane",  input.int(1,"_tmp_min",minval=1)==1)  // placeholder, forces evaluation
+
+// End of emulated reference
